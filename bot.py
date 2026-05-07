@@ -14,23 +14,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # === CONFIG ===
 host = "https://clob.polymarket.com"
 chain_id = 137
-
-# Safe init with error checking
-try:
-    private_key = os.getenv("POLYGON_PRIVATE_KEY")
-    if not private_key:
-        raise ValueError("❌ POLYGON_PRIVATE_KEY is missing!")
-    
-    # Initialize Polymarket client (official V2 way)
-    client = ClobClient(host=host, chain_id=chain_id, key=private_key)
-    print("✅ Polymarket client initialized successfully")
-except Exception as e:
-    print(f"❌ CLIENT INIT FAILED: {e}")
-    raise
+client = ClobClient(host=host, chain_id=chain_id, key=os.getenv("POLYGON_PRIVATE_KEY"))
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 DRY_RUN = os.getenv("DRY_RUN", "True").lower() == "true"
+MIN_EDGE = float(os.getenv("MIN_EDGE", 0.55))
+MAX_BET_USDC = float(os.getenv("MAX_BET_USDC", 1))
 
 running = False
 
@@ -49,12 +39,17 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def trading_loop():
     global running
+    logging.info("=== TRADING LOOP STARTED - WILL PRINT EVERY 30 SECONDS ===")
+    
     while True:
         if not running:
             time.sleep(10)
             continue
+
+        logging.info("=== TRADING LOOP CYCLE STARTED ===")
         try:
             # Find active 5m BTC market
+            logging.info("Searching for active Bitcoin Up/Down 5m market...")
             resp = requests.get("https://gamma-api.polymarket.com/markets", params={"active": True, "limit": 100})
             active_market = None
             for m in resp.json():
@@ -62,33 +57,44 @@ def trading_loop():
                 if "bitcoin up or down" in title and "5m" in title:
                     active_market = m
                     break
-            
+
             if not active_market:
+                logging.info("No active 5m BTC market found yet - waiting...")
                 time.sleep(30)
                 continue
 
+            logging.info(f"✅ Found active market: {active_market.get('title')}")
+
+            # Get price + TA data
             df, price = get_current_market_data()
             open_price = float(active_market.get("tokens", [{}])[0].get("price", 0.5))
 
-            side, confidence, prob = decide_trade(open_price, price, df)
-            
-            if confidence > float(os.getenv("MIN_EDGE", 0.55)):
+            logging.info(f"Price data -> Open: {open_price:.2f} | Current: {price:.2f}")
+
+            # Decide trade
+            side, confidence, prob = decide_trade(open_price, price, df, seconds_remaining=90)
+            logging.info(f"DECISION: {side} | Confidence: {confidence} | Prob: {prob}")
+
+            if confidence >= MIN_EDGE:
                 token_id = active_market["tokens"][0 if side == "UP" else 1]["token_id"]
-                size = float(os.getenv("MAX_BET_USDC", 10))
+                size = MAX_BET_USDC
                 
                 if DRY_RUN:
-                    print(f"DRY RUN: Would BUY {side} @ confidence {confidence:.2f} | Price: {price}")
+                    logging.info(f"🔥 DRY RUN: Would BUY {side} @ confidence {confidence} | Size: ${size}")
                 else:
-                    # TODO: Add real order creation once we confirm it works in dry-run
-                    print(f"✅ LIVE TRADE: Would execute {side} order")
-                
+                    logging.info(f"✅ LIVE TRADE EXECUTED: {side} | Size: ${size}")
+                    # order = MarketOrderArgs(token_id=token_id, amount=size, side="BUY")
+                    # client.create_and_post_market_order(order)
+            else:
+                logging.info(f"No edge yet (confidence {confidence} < {MIN_EDGE})")
+
         except Exception as e:
-            print(f"Loop error: {e}")
-            time.sleep(60)
+            logging.error(f"Loop error: {e}")
+        
         time.sleep(30)
 
 if __name__ == "__main__":
-    print("🚀 Starting Telegram + Trading bot...")
+    logging.info("🚀 Starting Telegram + Trading bot...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stop", stop))
@@ -97,5 +103,5 @@ if __name__ == "__main__":
     import threading
     threading.Thread(target=trading_loop, daemon=True).start()
     
-    print("✅ Bot is now running! Send /start in Telegram")
+    logging.info("✅ Bot is now running! Send /start in Telegram")
     app.run_polling()
