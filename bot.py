@@ -46,24 +46,23 @@ def trading_loop():
             time.sleep(10)
             continue
 
-        logging.info("=== TRADING LOOP CYCLE STARTED ===")
         try:
-            # Find active 5m BTC market
-            logging.info("Searching for active Bitcoin Up/Down 5m market...")
+            logging.info("=== TRADING LOOP CYCLE STARTED ===")
+            
+            # Find active 5m BTC market (improved detection)
             resp = requests.get("https://gamma-api.polymarket.com/markets", params={"active": True, "limit": 100})
             active_market = None
             for m in resp.json():
                 title = m.get("title", "").lower()
-                if "bitcoin up or down" in title and "5m" in title:
+                if "bitcoin up or down" in title:
                     active_market = m
+                    logging.info(f"✅ FOUND MARKET: {m.get('title')}")
                     break
 
             if not active_market:
-                logging.info("No active 5m BTC market found yet - waiting...")
+                logging.info("No active 5m BTC market found yet - waiting for next window...")
                 time.sleep(30)
                 continue
-
-            logging.info(f"✅ Found active market: {active_market.get('title')}")
 
             # Get price + TA data
             df, price = get_current_market_data()
@@ -71,7 +70,6 @@ def trading_loop():
 
             logging.info(f"Price data -> Open: {open_price:.2f} | Current: {price:.2f}")
 
-            # Decide trade
             side, confidence, prob = decide_trade(open_price, price, df, seconds_remaining=90)
             logging.info(f"DECISION: {side} | Confidence: {confidence} | Prob: {prob}")
 
@@ -82,11 +80,9 @@ def trading_loop():
                 if DRY_RUN:
                     logging.info(f"🔥 DRY RUN: Would BUY {side} @ confidence {confidence} | Size: ${size}")
                 else:
-                    logging.info(f"✅ LIVE TRADE EXECUTED: {side} | Size: ${size}")
-                    # order = MarketOrderArgs(token_id=token_id, amount=size, side="BUY")
-                    # client.create_and_post_market_order(order)
+                    logging.info(f"✅ LIVE TRADE: {side} | Size: ${size}")
             else:
-                logging.info(f"No edge yet (confidence {confidence} < {MIN_EDGE})")
+                logging.info(f"No strong edge yet (confidence {confidence} < {MIN_EDGE})")
 
         except Exception as e:
             logging.error(f"Loop error: {e}")
