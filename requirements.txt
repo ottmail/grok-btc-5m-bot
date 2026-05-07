@@ -1,0 +1,8 @@
+py-clob-client-v2
+python-telegram-bot==21.4
+ccxt
+pandas
+pandas-ta
+python-dotenv
+websocket-client
+requests
